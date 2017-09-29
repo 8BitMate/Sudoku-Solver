@@ -5,11 +5,11 @@ module Sudoku where
 import Prelude hiding (mapM)
 import Data.Foldable (toList)
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Control.Monad.ST
 import Data.Char hiding (intToDigit, digitToInt)
 import Data.STRef
-import Data.Vector (Vector, mapM, unsafeFreeze)
+import Data.Vector (Vector, mapM, unsafeFreeze, (!))
 import Data.Vector.Mutable (MVector, STVector, new, write)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
@@ -107,6 +107,43 @@ flattenSudoku sudokuTable =
                     _   -> (row, column, digitToInt c)) flatSudoku'
     in  flatSudoku
 
+solveSudoku :: MSudoku s -> ST s [Sudoku]
+solveSudoku sudoku = do
+    let MSudoku rowsPerBox columnsPerBox rows columns boxes = sudoku
+    let width = rowsPerBox + columnsPerBox
+    squares <- squaresToList rows
+    undefined
+
+possibleSquareValues :: MSudoku s -> Square -> ST s [Int]
+possibleSquareValues sudoku square = do
+    let MSudoku rowsPerBox columnsPerBox rows columns boxes = sudoku
+    let Square row column box _ = square
+    let width = rowsPerBox * columnsPerBox
+    possible <- new $ width + 1
+    --init values
+    forM_ [0..width] (\i -> MV.write possible i True)
+    --Exclude possible numbers
+    forM_ (rows ! row) (\square -> do
+        Square _ _ _ number <- readSTRef square
+        MV.write possible number False)
+    forM_ (columns ! column) (\square -> do
+        Square _ _ _ number <- readSTRef square
+        MV.write possible number False)
+    forM_ (boxes ! box) (\square -> do
+        Square _ _ _ number <- readSTRef square
+        MV.write possible number False)
+    --Make and return a list of possible numbers
+    listRef <- newSTRef []
+    forM_ [1..width] (\i -> do
+        isPossible <- MV.read possible i
+        when isPossible $
+            do  list <- readSTRef listRef
+                writeSTRef listRef (i:list))
+    readSTRef listRef
+
+squaresToList :: Matrix (STRef s Square) -> ST s [STRef s Square]
+squaresToList rows =
+    return $ V.foldr (flip (V.foldr (:))) [] rows
 
 freezeMSudoku :: MSudoku s -> ST s Sudoku
 freezeMSudoku (MSudoku rowsPerBox columnsPerBox rows columns boxes) = do
@@ -145,12 +182,3 @@ writeSTMatrix m row column x = do
 
 readSTRefMatrix :: Matrix (STRef s a) -> ST s (Matrix a)
 readSTRefMatrix = (mapM . mapM) readSTRef
-
-test = do
-    stm <- newSTMatrix 1 2
-    x <- newSTRef 0
-    writeSTMatrix stm 0 0 x
-    writeSTMatrix stm 0 1 x
-    m <- unsafeFreezeSTMatrix stm
-    modifySTRef' x (+1)
-    readSTRefMatrix m
