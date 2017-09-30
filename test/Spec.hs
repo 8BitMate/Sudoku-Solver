@@ -43,7 +43,7 @@ testBoard2 = (2, 3,
      "3---1-",
      "--14--"])
 
---Har 28 løsninger
+--Has 28 solutions
 testBoard3 = (2, 3,
      ["--1--3",
       "------",
