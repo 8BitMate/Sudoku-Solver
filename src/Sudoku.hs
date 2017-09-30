@@ -1,11 +1,12 @@
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE Strict #-}
 
 module Sudoku where
 
 import Prelude hiding (mapM)
 import Data.Foldable (toList)
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, filterM)
 import Control.Monad.ST
 import Data.Char hiding (intToDigit, digitToInt)
 import Data.STRef
@@ -40,7 +41,7 @@ type Number = Int
 
 instance Show Sudoku where
     show (Sudoku rowsN columnsN rows _ _) =
-        go (rowsN * columnsN) $ concatMap V.toList rows
+        go (rowsN * columnsN) $! matrixToList rows
         where
             go width [] = line width
             go width (Square row column box number : rows)
@@ -71,6 +72,10 @@ digitToInt c
     | isDigit c = ord c - ord '0'
     | c >= 'A' && c < chr (ord 'A' + 54) = ord c - ord 'A' + 10
 
+changeSquareNumber :: Square -> Int -> Square
+changeSquareNumber (Square row column box _) = Square row column box
+{-# INLINE changeSquareNumber #-}
+
 emptyMSudoku :: Int -> Int -> ST s (MSudoku s)
 emptyMSudoku rows columns =
     makeMSudoku rows columns $ replicate width $ replicate width '-'
@@ -84,8 +89,8 @@ makeMSudoku rowsN columnsN sudokuTable = do
     rows <- newSTMatrix width width
     columns <- newSTMatrix width width
     boxes <- newSTMatrix width width
-    let flatSudoku = flattenSudoku sudokuTable
-    forM_ flatSudoku (\(row, column, number) -> do
+    let rowColumnList = makeRowColumnList sudokuTable
+    forM_ rowColumnList (\(row, column, number) -> do
         let box = (column `div` columnsN) + rowsN * (row `div` rowsN)
         let boxColumn = (column `mod` columnsN) + columnsN * (row `mod` rowsN)
         square <- newSTRef $ Square row column box number
@@ -97,22 +102,48 @@ makeMSudoku rowsN columnsN sudokuTable = do
     boxes' <- unsafeFreezeSTMatrix boxes
     return $ MSudoku rowsN columnsN rows' columns' boxes'
 
-flattenSudoku :: (Foldable f, Foldable g) => f (g Char) -> [(Row, Column, Number)]
-flattenSudoku sudokuTable =
-    let flatSudoku' = concat $ zipWith (\row -> map (\(column, c) -> (row, column, c)))
-                      [0..] $ map (zip [0..] . toList) $ toList sudokuTable
-        flatSudoku = map (\(row, column, c) ->
+--Makes a list containing the rows, columns and numbers for each Square
+makeRowColumnList :: (Foldable f, Foldable g) => f (g Char) -> [(Row, Column, Number)]
+makeRowColumnList sudokuTable =
+    let rowColumnList' = concat $! zipWith (\row -> map (\(column, c) -> (row, column, c)))
+                      [0..] $! map (zip [0..] . toList) $! toList sudokuTable
+        rowColumnList = map (\(row, column, c) ->
                 case c of
                     '-' -> (row, column, 0)
-                    _   -> (row, column, digitToInt c)) flatSudoku'
-    in  flatSudoku
+                    _   -> (row, column, digitToInt c)) rowColumnList'
+    in  rowColumnList
 
 solveSudoku :: MSudoku s -> ST s [Sudoku]
 solveSudoku sudoku = do
     let MSudoku rowsPerBox columnsPerBox rows columns boxes = sudoku
     let width = rowsPerBox + columnsPerBox
-    squares <- squaresToList rows
-    undefined
+    squares <- filterZeroes =<< squaresToList rows
+    solutionList <- newSTRef []
+    solveSudoku' sudoku squares solutionList
+    readSTRef solutionList
+
+solveSudoku' ::    MSudoku s        --The sudoku board to be solved
+                -> [STRef s Square] --List of Squares
+                -> STRef s [Sudoku] --List of solutions
+                -> ST s ()
+--If we have only one element left
+solveSudoku' sudoku [square] solutionList = do
+    square' <- readSTRef square
+    solutions <- possibleSquareValues sudoku square'
+    forM_ solutions (\num -> do
+        modifySTRef' square $! flip changeSquareNumber num
+        solution <- freezeMSudoku sudoku
+        modifySTRef' solutionList (solution:)
+        modifySTRef' square $! flip changeSquareNumber 0)
+
+--For all other cases
+solveSudoku' sudoku (square:squares) solutionList = do
+    square' <- readSTRef square
+    solutions <- possibleSquareValues sudoku square'
+    forM_ solutions (\num -> do
+        modifySTRef' square $! flip changeSquareNumber num
+        solveSudoku' sudoku squares solutionList
+        modifySTRef' square $! flip changeSquareNumber 0)
 
 possibleSquareValues :: MSudoku s -> Square -> ST s [Int]
 possibleSquareValues sudoku square = do
@@ -133,33 +164,53 @@ possibleSquareValues sudoku square = do
         Square _ _ _ number <- readSTRef square
         MV.write possible number False)
     --Make and return a list of possible numbers
-    listRef <- newSTRef []
+    list <- newSTRef []
     forM_ [1..width] (\i -> do
         isPossible <- MV.read possible i
-        when isPossible $
-            do  list <- readSTRef listRef
-                writeSTRef listRef (i:list))
-    readSTRef listRef
+        when isPossible $ modifySTRef' list (i:))
+    readSTRef list
+--Inlining here might be overkill, but the function is only used in solveSudoku
+--so it might increase the performance somewhat.
+{-# INLINE possibleSquareValues #-}
+
+matrixToList :: Matrix a -> [a]
+matrixToList = V.foldr (flip (V.foldr (:))) []
+{-# INLINE matrixToList #-}
 
 squaresToList :: Matrix (STRef s Square) -> ST s [STRef s Square]
-squaresToList rows =
-    return $ V.foldr (flip (V.foldr (:))) [] rows
+squaresToList m = return $! matrixToList m
+{-# INLINE squaresToList #-}
+
+--Creates a list containing only empty squares
+filterZeroes :: [STRef s Square] -> ST s [STRef s Square]
+filterZeroes squares = do
+    list <- newSTRef []
+    --This will also reverse the order of the list in addition to filter out
+    --non zero values.
+    forM_ squares (\square -> do
+        Square _ _ _ number <- readSTRef square
+        modifySTRef' list (\list -> if number == 0 then square:list else list))
+    --I don't actually have to re-reverse the list, but then I know the squares
+    --will be evaluated from top to bottom, instead of the opposite.
+    modifySTRef' list reverse
+    readSTRef list
+{-# INLINE filterZeroes #-}
 
 freezeMSudoku :: MSudoku s -> ST s Sudoku
 freezeMSudoku (MSudoku rowsPerBox columnsPerBox rows columns boxes) = do
     rows' <- readSTRefMatrix rows
     columns' <- readSTRefMatrix columns
     boxes' <- readSTRefMatrix boxes
-    return $ Sudoku rowsPerBox columnsPerBox rows' columns' boxes'
+    return $! Sudoku rowsPerBox columnsPerBox rows' columns' boxes'
 
 newSTMatrix :: Int -> Int -> ST s (STMatrix s a)
 newSTMatrix rows columns =
     MV.replicateM rows (new columns)
 
 unsafeFreezeSTMatrix :: STMatrix s a -> ST s (Matrix a)
-unsafeFreezeSTMatrix stv = do
-    v <- unsafeFreeze stv
-    mapM unsafeFreeze v
+unsafeFreezeSTMatrix stm = do
+    m <- unsafeFreeze stm
+    mapM unsafeFreeze m
 
 replicateSTMatrix :: Int -> Int -> a -> ST s (STMatrix s a)
 replicateSTMatrix rows columns x =
