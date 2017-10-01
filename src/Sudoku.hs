@@ -92,7 +92,7 @@ emptyMSudoku rows columns =
     makeMSudoku rows columns $ replicate width $ replicate width '-'
         where width = rows * columns
 
---rowsN and columnsN represents then number of rows and columns per box
+--rowsN and columnsN represents the number of rows and columns per box
 --Assumes the input is correct
 makeMSudoku :: Int -> Int -> [String] -> ST s (MSudoku s)
 makeMSudoku rowsN columnsN sudokuTable = do
@@ -133,7 +133,7 @@ solveSudoku sudoku = do
     solveSudoku' sudoku squares solutionList
     readSTRef solutionList
 
-solveSudoku' ::    MSudoku s        --The sudoku board to be solved
+solveSudoku'    :: MSudoku s        --The sudoku board to be solved
                 -> [STRef s Square] --List of Squares
                 -> STRef s [Sudoku] --List of solutions
                 -> ST s ()
