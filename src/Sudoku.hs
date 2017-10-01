@@ -7,7 +7,10 @@ Sudoku(..),
 Square(..),
 emptyMSudoku,
 makeMSudoku,
-solveSudoku
+solveSudoku,
+digitToInt,
+intToDigit,
+isSudokuDigit
 ) where
 
 import Prelude hiding (mapM, ($))
@@ -82,6 +85,9 @@ digitToInt :: Char -> Int
 digitToInt c
     | isDigit c = ord c - ord '0'
     | c >= 'A' && c < chr (ord 'A' + 54) = ord c - ord 'A' + 10
+
+isSudokuDigit :: Char -> Bool
+isSudokuDigit c = isDigit c || c >= 'A' && c < chr (ord 'A' + 54)
 
 changeSquareNumber :: Square -> Int -> Square
 changeSquareNumber (Square row column box _) = Square row column box
